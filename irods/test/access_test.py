@@ -1,27 +1,20 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
-from irods.models import User
 from irods.access import iRODSAccess
-from irods.session import iRODSSession
 import irods.test.config as config
 import irods.test.helpers as helpers
 
-from irods.models import (
-    DataObject, Collection, User, DataAccess, CollectionAccess)
 
 
 class TestAccess(unittest.TestCase):
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
-        # Create dummy test collection
+        # Create test collection
         self.coll_path = '/{0}/home/{1}/test_dir'.format(
             config.IRODS_SERVER_ZONE, config.IRODS_USER_USERNAME)
         self.coll = helpers.make_collection(self.sess, self.coll_path)

@@ -3,6 +3,7 @@ import logging
 import socket
 import xml.etree.ElementTree as ET
 
+
 from irods import IRODS_VERSION
 from irods.message.message import Message
 from irods.message.property import (BinaryProperty, StringProperty,
@@ -12,17 +13,26 @@ from irods.exception import NetworkException
 
 logger = logging.getLogger(__name__)
 
+try:
+    # Python 2
+    UNICODE = unicode
+except NameError:
+    # Python 3
+    UNICODE = str
+
+
 def _recv_message_in_len(sock, size):
     size_left = size
     retbuf = None
 
-    while(size_left > 0):
+    while size_left > 0:
         # set timeout - 90 secs
         sock.settimeout(90)
         try:
             buf = sock.recv(size_left, socket.MSG_WAITALL)
         except AttributeError:
             buf = sock.recv(size_left)
+
         # unset timeout
         sock.settimeout(None)
         if len(buf) > 0:
@@ -37,8 +47,9 @@ def _recv_message_in_len(sock, size):
     return retbuf
 
 class iRODSMessage(object):
-    def __init__(self, type=None, msg=None, error=None, bs=None, int_info=None):
-        self.type = type
+
+    def __init__(self, msg_type=b'', msg=None, error=b'', bs=b'', int_info=0):
+        self.msg_type = msg_type
         self.msg = msg
         self.error = error
         self.bs = bs
@@ -53,7 +64,7 @@ class iRODSMessage(object):
         rsp_header = _recv_message_in_len(sock, rsp_header_size)
 
         xml_root = ET.fromstring(rsp_header)
-        type = xml_root.find('type').text
+        msg_type = xml_root.find('type').text
         msg_len = int(xml_root.find('msgLen').text)
         err_len = int(xml_root.find('errorLen').text)
         bs_len = int(xml_root.find('bsLen').text)
@@ -66,26 +77,51 @@ class iRODSMessage(object):
         #bs = sock.recv(bs_len, socket.MSG_WAITALL) if bs_len != 0 else None
         bs = _recv_message_in_len(sock, bs_len) if bs_len != 0 else None
 
-        #if message:
-            #logger.debug(message)
+        # if message:
+        #     logger.debug(message)
 
-        return iRODSMessage(type, message, error, bs, int_info)
+        return iRODSMessage(msg_type, message, error, bs, int_info)
+
+
+    @staticmethod
+    def encode_unicode(my_str):
+        if isinstance(my_str, UNICODE):
+            return my_str.encode('utf-8')
+        else:
+            return my_str
+
 
     def pack(self):
-        main_msg = self.msg.pack() if self.msg else None
-        msg_header = "<MsgHeader_PI><type>%s</type><msgLen>%d</msgLen>\
-            <errorLen>%d</errorLen><bsLen>%d</bsLen><intInfo>%d</intInfo>\
-            </MsgHeader_PI>" % (
-                self.type,
-                len(main_msg) if main_msg else 0,
-                len(self.error) if self.error else 0,
-                len(self.bs) if self.bs else 0,
-                self.int_info if self.int_info else 0
-            )
+        # pack main message and endcode if needed
+        if self.msg:
+            main_msg = self.encode_unicode(self.msg.pack())
+        else:
+            main_msg = b''
+
+        # encode message parts if needed
+        self.error = self.encode_unicode(self.error)
+        self.bs = self.encode_unicode(self.bs)
+
+        header_info = {'type' : self.msg_type,
+                       'msg_len': len(main_msg),
+                       'err_len': len(self.error),
+                       'bs_len': len(self.bs),
+                       'int_info': self.int_info}
+
+        msg_header = ("<MsgHeader_PI>"
+                      "<type>{type}</type>"
+                      "<msgLen>{msg_len}</msgLen>"
+                      "<errorLen>{err_len}</errorLen>"
+                      "<bsLen>{bs_len}</bsLen>"
+                      "<intInfo>{int_info}</intInfo>"
+                      "</MsgHeader_PI>").format(**header_info)
+
+        # encode message header if needed
+        msg_header = self.encode_unicode(msg_header)
+
         msg_header_length = struct.pack(">i", len(msg_header))
-        parts = [x for x in [main_msg, self.error, self.bs] if x is not None]
-        msg = msg_header_length + msg_header + "".join(parts)
-        return msg
+        return msg_header_length + msg_header + main_msg + self.error + self.bs
+
 
     def get_main_message(self, cls):
         msg = cls()
@@ -128,7 +164,21 @@ class AuthChallenge(Message):
     _name = 'authRequestOut_PI'
     challenge = BinaryProperty(64)
 
-#define InxIvalPair_PI "int iiLen; int *inx(iiLen); int *ivalue(iiLen);"
+# define InxIvalPair_PI "int iiLen; int *inx(iiLen); int *ivalue(iiLen);"
+
+
+class BinBytesBuf(Message):
+    _name = 'BinBytesBuf_PI'
+    buflen = IntegerProperty()
+    buf = BinaryProperty()
+
+
+class GSIAuthMessage(Message):
+    _name = 'authPlugReqInp_PI'
+    auth_scheme_ = StringProperty()
+    context_ = StringProperty()
+
+
 class IntegerIntegerMap(Message):
     _name = 'InxIvalPair_PI'
     def __init__(self, data=None):
@@ -281,7 +331,9 @@ class VersionResponse(Message):
     reconnAddr = StringProperty()
     cookie = IntegerProperty()
 
-#define generalAdminInp_PI "str *arg0; str *arg1; str *arg2; str *arg3; str *arg4; str *arg5; str *arg6; str *arg7;  str *arg8;  str *arg9;"
+# define generalAdminInp_PI "str *arg0; str *arg1; str *arg2; str *arg3;
+# str *arg4; str *arg5; str *arg6; str *arg7;  str *arg8;  str *arg9;"
+
 class GeneralAdminRequest(Message):
     _name = 'generalAdminInp_PI'
     def __init__(self, *args):
@@ -302,6 +354,156 @@ class GeneralAdminRequest(Message):
     arg7 = StringProperty()
     arg8 = StringProperty()
     arg9 = StringProperty()
+
+#define specificQueryInp_PI "str *sql; str *arg1; str *arg2; str *arg3; str *arg4; str *arg5; str *arg6; str *arg7; str *arg8; str *arg9; str *arg10; int maxRows; int continueInx; int rowOffset; int options; struct KeyValPair_PI;"
+
+class SpecificQueryRequest(Message):
+    _name = 'specificQueryInp_PI'
+    sql = StringProperty()
+
+    arg1 = StringProperty()
+    arg2 = StringProperty()
+    arg3 = StringProperty()
+    arg4 = StringProperty()
+    arg5 = StringProperty()
+    arg6 = StringProperty()
+    arg7 = StringProperty()
+    arg8 = StringProperty()
+    arg9 = StringProperty()
+    arg10 = StringProperty()
+
+    maxRows = IntegerProperty()
+    continueInx = IntegerProperty()
+    rowOffset = IntegerProperty()
+    options = IntegerProperty()
+    KeyValPair_PI = SubmessageProperty(StringStringMap)
+
+
+# define RHostAddr_PI "str hostAddr[LONG_NAME_LEN]; str
+# rodsZone[NAME_LEN]; int port; int dummyInt;"
+
+class RodsHostAddress(Message):
+    _name = 'RHostAddr_PI'
+    hostAddr = StringProperty()
+    rodsZone = StringProperty()
+    port = IntegerProperty()
+    dummyInt = IntegerProperty()
+
+
+# define MsParam_PI "str *label; piStr *type; ?type *inOutStruct; struct
+# *BinBytesBuf_PI;"
+
+class MsParam(Message):
+    _name = 'MsParam_PI'
+    label = StringProperty()
+    type = StringProperty()
+
+    # for packing
+    inOutStruct = SubmessageProperty()
+    BinBytesBuf_PI = SubmessageProperty(BinBytesBuf)
+
+    # override Message.unpack() to unpack inOutStruct
+    # depending on the received <type> element
+    def unpack(self, root):
+        for (name, prop) in self._ordered_properties:
+            if name == 'inOutStruct':
+                continue
+
+            unpacked_value = prop.unpack(root.findall(name))
+            self._values[name] = unpacked_value
+
+            # type tells us what type of data structure we are unpacking
+            # e.g: <type>ExecCmdOut_PI</type>
+            if name == 'type':
+
+                # unpack struct accordingly
+                message_class = globals()[unpacked_value]
+                self._values['inOutStruct'] = SubmessageProperty(
+                    message_class).unpack(root.findall(unpacked_value))
+
+
+# define MsParamArray_PI "int paramLen; int oprType; struct
+# *MsParam_PI[paramLen];"
+
+class MsParamArray(Message):
+    _name = 'MsParamArray_PI'
+    paramLen = IntegerProperty()
+    oprType = IntegerProperty()
+    MsParam_PI = ArrayProperty(SubmessageProperty(MsParam))
+
+
+# define ExecMyRuleInp_PI "str myRule[META_STR_LEN]; struct RHostAddr_PI;
+# struct KeyValPair_PI; str outParamDesc[LONG_NAME_LEN]; struct
+# *MsParamArray_PI;"
+
+class RuleExecutionRequest(Message):
+    _name = 'ExecMyRuleInp_PI'
+    myRule = StringProperty()
+    addr = SubmessageProperty(RodsHostAddress)
+    condInput = SubmessageProperty(StringStringMap)
+    outParamDesc = StringProperty()
+    inpParamArray = SubmessageProperty(MsParamArray)
+
+
+# define ExecCmdOut_PI "struct BinBytesBuf_PI; struct BinBytesBuf_PI; int
+# status;"
+
+class ExecCmdOut_PI(Message):
+    '''
+    In this case the above class name must match the name
+    of its root element to be unpacked dynamically,
+    since it is one of the possible types for MsParam.
+    '''
+    _name = 'ExecCmdOut_PI'
+
+    # for packing
+    stdoutBuf = SubmessageProperty(BinBytesBuf)
+    stderrBuf = SubmessageProperty(BinBytesBuf)
+
+    status = IntegerProperty()
+
+    # need custom unpacking since both buffers have the same element name
+    def unpack(self, root):
+        for (name, prop) in self._ordered_properties:
+            if name == 'stdoutBuf':
+                unpacked_value = prop.unpack(
+                    root.findall(prop.message_cls._name)[:1])
+
+            elif name == 'stderrBuf':
+                unpacked_value = prop.unpack(
+                    root.findall(prop.message_cls._name)[1:])
+
+            else:
+                unpacked_value = prop.unpack(root.findall(name))
+
+            self._values[name] = unpacked_value
+
+
+# define STR_PI "str myStr;"
+
+class STR_PI(Message):
+    '''
+    Another "returnable" MsParam type
+    '''
+    _name = 'STR_PI'
+    myStr = StringProperty()
+
+
+#define RErrMsg_PI "int status; str msg[ERR_MSG_LEN];"
+
+class ErrorMessage(Message):
+    _name = 'RErrMsg_PI'
+    status = IntegerProperty()
+    msg = StringProperty()
+
+
+#define RError_PI "int count; struct *RErrMsg_PI[count];"
+
+class Error(Message):
+    _name = 'RError_PI'
+    count = IntegerProperty()
+    RErrMsg_PI = ArrayProperty(SubmessageProperty(ErrorMessage))
+
 
 def empty_gen_query_out(cols):
     sql_results = [GenQueryResponseColumn(attriInx=col.icat_id, value=[]) for col in cols]

@@ -1,47 +1,78 @@
-from os.path import basename, dirname
-
+from __future__ import absolute_import
+import os
+import io
 from irods.models import DataObject
 from irods.manager import Manager
 from irods.message import (
     iRODSMessage, FileOpenRequest, ObjCopyRequest, StringStringMap)
-from irods.exception import (DataObjectDoesNotExist, CollectionDoesNotExist)
+from irods.exception import DataObjectDoesNotExist, DoesNotExist
 from irods.api_number import api_number
-from irods.data_object import iRODSDataObject
+from irods.data_object import (
+    iRODSDataObject, iRODSDataObjectFileRaw, chunks, irods_dirname, irods_basename)
 import irods.keywords as kw
 
 SEEK_SET = 0
 SEEK_CUR = 1
 SEEK_END = 2
 
+READ_BUFFER_SIZE = 1024 * io.DEFAULT_BUFFER_SIZE
+WRITE_BUFFER_SIZE = 1024 * io.DEFAULT_BUFFER_SIZE
+
 
 class DataObjectManager(Manager):
 
-    def get(self, path):
-        try:
-            parent = self.sess.collections.get(dirname(path))
-        except CollectionDoesNotExist:
-            raise DataObjectDoesNotExist()
+    def _download(self, obj, local_path, options=None):
+        if os.path.isdir(local_path):
+            file = os.path.join(local_path, irods_basename(obj))
+        else:
+            file = local_path
+
+        with open(file, 'wb') as f, self.open(obj, 'r', options) as o:
+            for chunk in chunks(o, READ_BUFFER_SIZE):
+                f.write(chunk)
+
+
+    def get(self, path, file=None, options=None):
+        parent = self.sess.collections.get(irods_dirname(path))
+
+        # TODO: optimize
+        if file:
+            self._download(path, file, options)
 
         query = self.sess.query(DataObject)\
-            .filter(DataObject.name == basename(path))\
+            .filter(DataObject.name == irods_basename(path))\
             .filter(DataObject.collection_id == parent.id)
-        results = query.all()
+        results = query.all() # get up to max_rows replicas
         if len(results) <= 0:
             raise DataObjectDoesNotExist()
         return iRODSDataObject(self, parent, results)
 
-    def create(self, path, resource=None, options={}):
+
+    def put(self, file, irods_path, options=None):
+        if irods_path.endswith('/'):
+            obj = irods_path + os.path.basename(file)
+        else:
+            obj = irods_path
+
+        with open(file, 'rb') as f, self.open(obj, 'w', options) as o:
+            for chunk in chunks(f, WRITE_BUFFER_SIZE):
+                o.write(chunk)
+
+
+    def create(self, path, resource=None, options=None):
+        if options is None:
+            options = {}
         kvp = {kw.DATA_TYPE_KW: 'generic'}
         if resource:
             kvp[kw.DEST_RESC_NAME_KW] = resource
         kvp.update(options)
         message_body = FileOpenRequest(
             objPath=path,
-            createMode=0644,
+            createMode=0o644,
             openFlags=0,
             offset=0,
             dataSize=-1,
-            numThreads=0,
+            numThreads=self.sess.numThreads,
             oprType=0,
             KeyValPair_PI=StringStringMap(kvp),
         )
@@ -56,27 +87,52 @@ class DataObjectManager(Manager):
 
         return self.get(path)
 
-    def open(self, path, mode):
+
+    def open(self, path, mode, options=None):
+        if options is None:
+            options = {}
+
+        flags, seek_to_end = {
+            'r': (os.O_RDONLY, False),
+            'r+': (os.O_RDWR, False),
+            'w': (os.O_WRONLY | os.O_CREAT, False),
+            'w+': (os.O_RDWR | os.O_CREAT, False),
+            'a': (os.O_WRONLY | os.O_CREAT, True),
+            'a+': (os.O_RDWR | os.O_CREAT, True),
+        }[mode]
+        # TODO: Use seek_to_end
+
+        try:
+            oprType = options[kw.OPR_TYPE_KW]
+        except KeyError:
+            oprType = 0
+
+        # sanitize options before packing
+        options = {str(key): str(value) for key, value in options.items()}
+
         message_body = FileOpenRequest(
             objPath=path,
             createMode=0,
-            openFlags=mode,
+            openFlags=flags,
             offset=0,
             dataSize=-1,
-            numThreads=0,
-            oprType=0,
-            KeyValPair_PI=StringStringMap(),
+            numThreads=self.sess.numThreads,
+            oprType=oprType,
+            KeyValPair_PI=StringStringMap(options),
         )
         message = iRODSMessage('RODS_API_REQ', msg=message_body,
                                int_info=api_number['DATA_OBJ_OPEN_AN'])
 
         conn = self.sess.pool.get_connection()
         conn.send(message)
-        response = conn.recv()
-        return (conn, response.int_info)
+        desc = conn.recv().int_info
 
-    def unlink(self, path, force=False):
-        options = {}
+        return io.BufferedRandom(iRODSDataObjectFileRaw(conn, desc, options))
+
+
+    def unlink(self, path, force=False, options=None):
+        if options is None:
+            options = {}
         if force:
             options[kw.FORCE_FLAG_KW] = ''
         message_body = FileOpenRequest(
@@ -85,7 +141,7 @@ class DataObjectManager(Manager):
             openFlags=0,
             offset=0,
             dataSize=-1,
-            numThreads=0,
+            numThreads=self.sess.numThreads,
             oprType=0,
             KeyValPair_PI=StringStringMap(options),
         )
@@ -95,6 +151,15 @@ class DataObjectManager(Manager):
         with self.sess.pool.get_connection() as conn:
             conn.send(message)
             response = conn.recv()
+
+
+    def exists(self, path):
+        try:
+            self.get(path)
+        except DoesNotExist:
+            return False
+        return True
+
 
     def move(self, src_path, dest_path):
         # check if dest is a collection
@@ -111,7 +176,7 @@ class DataObjectManager(Manager):
             openFlags=0,
             offset=0,
             dataSize=0,
-            numThreads=0,
+            numThreads=self.sess.numThreads,
             oprType=11,   # RENAME_DATA_OBJ
             KeyValPair_PI=StringStringMap(),
         )
@@ -121,7 +186,7 @@ class DataObjectManager(Manager):
             openFlags=0,
             offset=0,
             dataSize=0,
-            numThreads=0,
+            numThreads=self.sess.numThreads,
             oprType=11,   # RENAME_DATA_OBJ
             KeyValPair_PI=StringStringMap(),
         )
@@ -136,6 +201,51 @@ class DataObjectManager(Manager):
             conn.send(message)
             response = conn.recv()
 
+
+    def copy(self, src_path, dest_path, options=None):
+        if options is None:
+            options = {}
+
+        # check if dest is a collection
+        # if so append filename to it
+        if self.sess.collections.exists(dest_path):
+            filename = src_path.rsplit('/', 1)[1]
+            target_path = dest_path + '/' + filename
+        else:
+            target_path = dest_path
+
+        src = FileOpenRequest(
+            objPath=src_path,
+            createMode=0,
+            openFlags=0,
+            offset=0,
+            dataSize=0,
+            numThreads=self.sess.numThreads,
+            oprType=10,   # COPY_SRC
+            KeyValPair_PI=StringStringMap(),
+        )
+        dest = FileOpenRequest(
+            objPath=target_path,
+            createMode=0,
+            openFlags=0,
+            offset=0,
+            dataSize=0,
+            numThreads=self.sess.numThreads,
+            oprType=9,   # COPY_DEST
+            KeyValPair_PI=StringStringMap(options),
+        )
+        message_body = ObjCopyRequest(
+            srcDataObjInp_PI=src,
+            destDataObjInp_PI=dest
+        )
+        message = iRODSMessage('RODS_API_REQ', msg=message_body,
+                               int_info=api_number['DATA_OBJ_COPY_AN'])
+
+        with self.sess.pool.get_connection() as conn:
+            conn.send(message)
+            response = conn.recv()
+
+
     def truncate(self, path, size):
         options = {}
         message_body = FileOpenRequest(
@@ -144,7 +254,7 @@ class DataObjectManager(Manager):
             openFlags=0,
             offset=0,
             dataSize=size,
-            numThreads=0,
+            numThreads=self.sess.numThreads,
             oprType=0,
             KeyValPair_PI=StringStringMap(options),
         )
@@ -155,14 +265,17 @@ class DataObjectManager(Manager):
             conn.send(message)
             response = conn.recv()
 
-    def replicate(self, path, options={}):
+
+    def replicate(self, path, options=None):
+        if options is None:
+            options = {}
         message_body = FileOpenRequest(
             objPath=path,
             createMode=0,
             openFlags=0,
             offset=0,
             dataSize=-1,
-            numThreads=0,
+            numThreads=self.sess.numThreads,
             oprType=6,
             KeyValPair_PI=StringStringMap(options),
         )

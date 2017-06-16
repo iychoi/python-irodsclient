@@ -2,6 +2,8 @@
 # s/\(\w\+\)\s\+\(-\d\+\)/class \1(SystemException):\r    code = \2/g
 
 
+from __future__ import absolute_import
+import six
 class PycommandsException(Exception):
     pass
 
@@ -14,23 +16,27 @@ class DoesNotExist(PycommandsException):
     pass
 
 
-class DataObjectDoesNotExist(PycommandsException):
+class DataObjectDoesNotExist(DoesNotExist):
     pass
 
 
-class CollectionDoesNotExist(PycommandsException):
+class CollectionDoesNotExist(DoesNotExist):
     pass
 
 
-class UserDoesNotExist(PycommandsException):
+class UserDoesNotExist(DoesNotExist):
     pass
 
 
-class UserGroupDoesNotExist(PycommandsException):
+class UserGroupDoesNotExist(DoesNotExist):
     pass
 
 
-class ResourceDoesNotExist(PycommandsException):
+class ResourceDoesNotExist(DoesNotExist):
+    pass
+
+
+class OperationNotSupported(PycommandsException):
     pass
 
 
@@ -54,13 +60,12 @@ class iRODSExceptionMeta(type):
             iRODSExceptionMeta.codes[attrs['code']] = self
 
 
-class iRODSException(Exception):
-    __metaclass__ = iRODSExceptionMeta
+class iRODSException(six.with_metaclass(iRODSExceptionMeta, Exception)):
     pass
 
 
-def get_exception_by_code(code):
-    return iRODSExceptionMeta.codes[code]()
+def get_exception_by_code(code, message=None):
+    return iRODSExceptionMeta.codes[code](message)
 
 
 class SystemException(iRODSException):
@@ -1121,6 +1126,10 @@ class CAT_PASSWORD_ENCODING_ERROR(CatalogLibraryException):
 
 class CAT_TABLE_ACCESS_DENIED(CatalogLibraryException):
     code = -851000
+
+
+class CAT_UNKNOWN_SPECIFIC_QUERY(CatalogLibraryException):
+    code = -853000
 
 
 class RDSException(iRODSException):

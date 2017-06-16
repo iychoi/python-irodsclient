@@ -1,14 +1,13 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
 from irods.meta import iRODSMeta
-from irods.models import (
-    DataObject, Collection, Resource, User, DataObjectMeta,
-                         CollectionMeta, ResourceMeta, UserMeta)
-from irods.session import iRODSSession
+from irods.models import DataObject, Collection
 import irods.test.config as config
 import irods.test.helpers as helpers
+from six.moves import range
 
 
 class TestMeta(unittest.TestCase):
@@ -27,11 +26,7 @@ class TestMeta(unittest.TestCase):
     (attr1, value1, unit1) = ('attr1', 'value1', 'unit1')
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
         # Create test collection and (empty) test object
         self.coll = self.sess.collections.create(self.coll_path)
@@ -68,8 +63,8 @@ class TestMeta(unittest.TestCase):
         meta = self.sess.metadata.get(DataObject, self.obj_path)
 
         # sort results by metadata id
-        def getKey(iRODSMeta):
-            return iRODSMeta.id
+        def getKey(AVU):
+            return AVU.avu_id
         meta = sorted(meta, key=getKey)
 
         # assertions
@@ -172,11 +167,11 @@ class TestMeta(unittest.TestCase):
 
         # get metadata
         meta = self.sess.metadata.get(DataObject, test_obj_path)
-        id = meta[0].id
+        avu_id = meta[0].avu_id
 
         # assert
         self.assertEqual(
-            repr(meta[0]), "<iRODSMeta {id} {attribute} {value} {units}>".format(**locals()))
+            repr(meta[0]), "<iRODSMeta {avu_id} {attribute} {value} {units}>".format(**locals()))
 
         # remove test object
         obj.unlink(force=True)
@@ -244,13 +239,13 @@ class TestMeta(unittest.TestCase):
 
         # try contains with bad key type
         with self.assertRaises(TypeError):
-            int() in imc
+            _ = (int() in imc)
 
         # set item
         imc[attr_name] = iRODSMeta(attr_name, 'boo')
 
         # get item
-        imc[attr_name]
+        _ = imc[attr_name]
 
         # del item with bad key type
         with self.assertRaises(TypeError):
@@ -260,7 +255,7 @@ class TestMeta(unittest.TestCase):
         del imc[attr_name]
 
         with self.assertRaises(KeyError):
-            imc[attr_name]
+            _ = imc[attr_name]
 
         # remove all metadta
         imc.remove_all()

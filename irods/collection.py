@@ -1,9 +1,9 @@
+from __future__ import absolute_import
 import itertools
 import operator
-from os.path import basename
 
 from irods.models import Collection, DataObject
-from irods.data_object import iRODSDataObject
+from irods.data_object import iRODSDataObject, irods_basename
 from irods.meta import iRODSMetaCollection
 
 
@@ -14,7 +14,7 @@ class iRODSCollection(object):
         if result:
             self.id = result[Collection.id]
             self.path = result[Collection.name]
-            self.name = basename(result[Collection.name])
+            self.name = irods_basename(result[Collection.name])
         self._meta = None
 
     @property
@@ -44,7 +44,9 @@ class iRODSCollection(object):
             for _, replicas in grouped
         ]
 
-    def remove(self, recurse=True, force=False, additional_flags={}):
+    def remove(self, recurse=True, force=False, additional_flags=None):
+        if additional_flags is None:
+            additional_flags = {}
         self.manager.remove(self.path, recurse, force, additional_flags)
 
     def move(self, path):

@@ -1,21 +1,17 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
-from irods.models import User
-from irods.session import iRODSSession
 from irods.exception import UserGroupDoesNotExist
-import irods.test.config as config
+import irods.test.helpers as helpers
+from six.moves import range
 
 
 class TestUserGroup(unittest.TestCase):
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
     def tearDown(self):
         '''Close connections
@@ -88,6 +84,33 @@ class TestUserGroup(unittest.TestCase):
         # group should be gone
         with self.assertRaises(UserGroupDoesNotExist):
             self.sess.user_groups.get(group_name)
+
+
+    def test_user_dn(self):
+        user_name = "testuser"
+        user_dn = "0123456789"
+
+        # create user
+        user = self.sess.users.create(user_name, 'rodsuser')
+
+        # expect no dn
+        self.assertEqual(user.dn, None)
+
+        # add dn
+        user.modify('addAuth', user_dn)
+
+        # confirm dn
+        self.assertEqual(user.dn, user_dn)
+
+        # remove dn
+        user.modify('rmAuth', user_dn)
+
+        # confirm removal
+        self.assertEqual(user.dn, None)
+
+        # delete user
+        user.remove()
+
 
 if __name__ == '__main__':
     # let the tests find the parent irods lib

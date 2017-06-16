@@ -1,9 +1,9 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
 from irods.models import Collection, DataObject
-from irods.session import iRODSSession
 import irods.test.config as config
 import irods.test.helpers as helpers
 
@@ -15,14 +15,10 @@ class TestContinueQuery(unittest.TestCase):
     obj_count = 2500
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
-        # Create dummy test collection
-        self.coll = helpers.make_dummy_collection(
+        # Create test collection
+        self.coll = helpers.make_test_collection(
             self.sess, self.coll_path, self.obj_count)
 
     def tearDown(self):
@@ -38,9 +34,9 @@ class TestContinueQuery(unittest.TestCase):
 
             # check object names
             counter = 0
-            for object in objects:
+            for obj in objects:
                 self.assertEqual(
-                    object.name, "dummy" + str(counter).zfill(6) + ".txt")
+                    obj.name, "test" + str(counter).zfill(6) + ".txt")
                 counter += 1
 
     def test_files_generator(self):
@@ -53,7 +49,7 @@ class TestContinueQuery(unittest.TestCase):
         for result in query.get_results():
             # what we should see
             object_path = self.coll_path + \
-                "/dummy" + str(counter).zfill(6) + ".txt"
+                "/test" + str(counter).zfill(6) + ".txt"
 
             # what we see
             result_path = "{0}/{1}".format(

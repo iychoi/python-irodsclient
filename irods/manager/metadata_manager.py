@@ -1,12 +1,12 @@
+from __future__ import absolute_import
 import logging
 from os.path import dirname, basename
 
 from irods.manager import Manager
 from irods.message import MetadataRequest, iRODSMessage
 from irods.api_number import api_number
-from irods.models import (
-    DataObject, Collection, Resource, User, DataObjectMeta,
-                         CollectionMeta, ResourceMeta, UserMeta)
+from irods.models import (DataObject, Collection, Resource,
+                          User, DataObjectMeta, CollectionMeta, ResourceMeta, UserMeta)
 from irods.meta import iRODSMeta
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class MetadataManager(Manager):
             row[model.name],
             row[model.value],
             row[model.units],
-            id=row[model.id]
+            avu_id=row[model.id]
         ) for row in results]
 
     def add(self, model_cls, path, meta):

@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 from irods.models import User, UserGroup
 from irods.manager import Manager
 from irods.message import GeneralAdminRequest, iRODSMessage
@@ -82,7 +83,7 @@ class UserManager(Manager):
 
 class UserGroupManager(UserManager):
 
-    def get(self, name):
+    def get(self, name, user_zone=""):
         query = self.sess.query(UserGroup).filter(UserGroup.name == name)
 
         try:
@@ -91,12 +92,12 @@ class UserGroupManager(UserManager):
             raise UserGroupDoesNotExist()
         return iRODSUserGroup(self, result)
 
-    def create(self, name):
+    def create(self, name, user_type='rodsgroup', user_zone="", auth_str=""):
         message_body = GeneralAdminRequest(
             "add",
             "user",
             name,
-            "rodsgroup",
+            user_type,
             "",
             ""
         )

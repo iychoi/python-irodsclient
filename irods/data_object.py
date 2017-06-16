@@ -1,15 +1,27 @@
-from os import O_RDONLY, O_WRONLY, O_RDWR
-from io import RawIOBase, BufferedRandom
+from __future__ import absolute_import
+import io
 import sys
 
 from irods.models import DataObject
 from irods.meta import iRODSMetaCollection
 import irods.keywords as kw
+import six
+
+
+def chunks(f, chunksize=io.DEFAULT_BUFFER_SIZE):
+    return iter(lambda: f.read(chunksize), b'')
+
+def irods_dirname(path):
+    return path.rsplit('/', 1)[0]
+
+def irods_basename(path):
+    return path.rsplit('/', 1)[1]
 
 
 class iRODSReplica(object):
 
-    def __init__(self, status, resource_name, path):
+    def __init__(self, number, status, resource_name, path):
+        self.number = number
         self.status = status
         self.resource_name = resource_name
         self.path = path
@@ -28,7 +40,7 @@ class iRODSDataObject(object):
         self.manager = manager
         if parent and results:
             self.collection = parent
-            for attr, value in DataObject.__dict__.iteritems():
+            for attr, value in six.iteritems(DataObject.__dict__):
                 if not attr.startswith('_'):
                     try:
                         setattr(self, attr, results[0][value])
@@ -39,6 +51,7 @@ class iRODSDataObject(object):
             replicas = sorted(
                 results, key=lambda r: r[DataObject.replica_number])
             self.replicas = [iRODSReplica(
+                r[DataObject.replica_number],
                 r[DataObject.replica_status],
                 r[DataObject.resource_name],
                 r[DataObject.path]
@@ -55,21 +68,11 @@ class iRODSDataObject(object):
                 self.manager.sess.metadata, DataObject, self.path)
         return self._meta
 
-    def open(self, mode='r'):
-        flag, create_if_not_exists, seek_to_end = {
-            'r': (O_RDONLY, False, False),
-            'r+': (O_RDWR, False, False),
-            'w': (O_WRONLY, True, False),
-            'w+': (O_RDWR, True, False),
-            'a': (O_WRONLY, True, True),
-            'a+': (O_RDWR, True, True),
-        }[mode]
-        # TODO: Actually use create_if_not_exists and seek_to_end
-        conn, desc = self.manager.open(self.path, flag)
-        return BufferedRandom(iRODSDataObjectFileRaw(conn, desc))
+    def open(self, mode='r', options=None):
+        return self.manager.open(self.path, mode, options)
 
-    def unlink(self, force=False):
-        self.manager.unlink(self.path, force)
+    def unlink(self, force=False, options=None):
+        self.manager.unlink(self.path, force, options)
 
     def truncate(self, size):
         self.manager.truncate(self.path, size)
@@ -81,14 +84,15 @@ class iRODSDataObject(object):
         self.manager.replicate(self.path, options)
 
 
-class iRODSDataObjectFileRaw(RawIOBase):
+class iRODSDataObjectFileRaw(io.RawIOBase):
 
-    def __init__(self, conn, descriptor):
+    def __init__(self, conn, descriptor, options):
         self.conn = conn
         self.desc = descriptor
+        self.options = options
 
     def close(self):
-        self.conn.close_file(self.desc)
+        self.conn.close_file(self.desc, self.options)
         self.conn.release()
         super(iRODSDataObjectFileRaw, self).close()
         return None
@@ -105,7 +109,10 @@ class iRODSDataObjectFileRaw(RawIOBase):
         return len(contents)
 
     def write(self, b):
-        return self.conn.write_file(self.desc, str(b.tobytes()))
+        if isinstance(b, memoryview):
+            return self.conn.write_file(self.desc, b.tobytes())
+
+        return self.conn.write_file(self.desc, b)
 
     def readable(self):
         return True

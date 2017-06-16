@@ -1,10 +1,10 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
+from __future__ import absolute_import
 import os
 import sys
 import unittest
 from irods.models import Collection, DataObject
-from irods.session import iRODSSession
 import irods.test.config as config
 import xml.etree.ElementTree as ET
 import logging
@@ -53,16 +53,12 @@ class TestUnicodeNames(unittest.TestCase):
         config.IRODS_SERVER_ZONE, config.IRODS_USER_USERNAME)
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
         # make list of unicode filenames, from file
         self.names = parse_xml_file(UNICODE_TEST_FILE)
 
-        # Create dummy test collection
+        # Create test collection
         self.coll = helpers.make_collection(
             self.sess, self.coll_path, self.names)
 

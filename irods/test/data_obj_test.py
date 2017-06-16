@@ -1,35 +1,31 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import socket
 import unittest
 from irods.models import Collection, DataObject
-from irods.session import iRODSSession
-from irods.exception import DataObjectDoesNotExist, CollectionDoesNotExist
-from irods.column import Column, Criterion
+import irods.exception as ex
+from irods.column import Criterion
+from irods.data_object import chunks
 import irods.test.config as config
 import irods.test.helpers as helpers
 import json
-import errno
 import hashlib
 import base64
-
+import irods.keywords as kw
 
 class TestDataObjOps(unittest.TestCase):
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
         # get server version
         with self.sess.pool.get_connection() as conn:
             self.server_version = tuple(int(token)
                                         for token in conn.server_version.replace('rods', '').split('.'))
 
-        # Create dummy test collection
+        # Create test collection
         self.coll_path = '/{0}/home/{1}/test_dir'.format(
             config.IRODS_SERVER_ZONE, config.IRODS_USER_USERNAME)
         self.coll = helpers.make_collection(self.sess, self.coll_path)
@@ -46,11 +42,30 @@ class TestDataObjOps(unittest.TestCase):
             svr_cfg = json.load(f)
 
         # inject a new rule base into the native rule engine
-        svr_cfg['rule_engines'][1]['plugin_specific_configuration'][
-            're_rulebase_set'] = [{"filename": "test"}, {"filename": "core"}]
+        svr_cfg['plugin_configuration']['rule_engines'][0]['plugin_specific_configuration'][
+            're_rulebase_set'] = ["test",  "core"]
 
         # dump to a string to repave the existing server_config.json
         return json.dumps(svr_cfg, sort_keys=True, indent=4, separators=(',', ': '))
+
+    def sha256_checksum(self, filename, block_size=65536):
+        sha256 = hashlib.sha256()
+        with open(filename, 'rb') as f:
+            for chunk in chunks(f, block_size):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
+    def test_obj_exists(self):
+        obj_name = 'this_object_will_exist_once_made'
+        exists_path = '{}/{}'.format(self.coll_path, obj_name)
+        helpers.make_object(self.sess, exists_path)
+        self.assertTrue(self.sess.data_objects.exists(exists_path))
+
+    def test_obj_does_not_exist(self):
+        does_not_exist_name = 'this_object_will_never_exist'
+        does_not_exist_path = '{}/{}'.format(self.coll_path,
+                                             does_not_exist_name)
+        self.assertFalse(self.sess.data_objects.exists(does_not_exist_path))
 
     def test_rename_obj(self):
         # test args
@@ -112,15 +127,56 @@ class TestDataObjOps(unittest.TestCase):
         # remove new collection
         new_coll.remove(recurse=True, force=True)
 
+    def test_copy_obj_to_obj(self):
+        # test args
+        collection = self.coll_path
+        src_file_name = 'foo'
+        dest_file_name = 'bar'
+
+        # make object in test collection
+        src_path = "{collection}/{src_file_name}".format(**locals())
+        src_obj = helpers.make_object(self.sess, src_path, options={kw.REG_CHKSUM_KW: ''})
+
+        # copy object
+        options = {kw.VERIFY_CHKSUM_KW: ''}
+        dest_path = "{collection}/{dest_file_name}".format(**locals())
+        self.sess.data_objects.copy(src_path, dest_path, options)
+
+        # compare checksums
+        dest_obj = self.sess.data_objects.get(dest_path)
+        self.assertEqual(src_obj.checksum, dest_obj.checksum)
+
+    def test_copy_obj_to_coll(self):
+        # test args
+        collection = self.coll_path
+        file_name = 'foo'
+        dest_coll_name = 'copy_dest_coll'
+        dest_coll_path = "{collection}/{dest_coll_name}".format(**locals())
+        dest_obj_path = "{collection}/{dest_coll_name}/{file_name}".format(
+            **locals())
+
+        # make object in test collection
+        path = "{collection}/{file_name}".format(**locals())
+        src_obj = helpers.make_object(self.sess, path, options={kw.REG_CHKSUM_KW: ''})
+
+        # make new collection and copy object into it
+        options = {kw.VERIFY_CHKSUM_KW: ''}
+        helpers.make_collection(self.sess, dest_coll_path)
+        self.sess.data_objects.copy(path, dest_coll_path, options)
+
+        # compare checksums
+        dest_obj = self.sess.data_objects.get(dest_obj_path)
+        self.assertEqual(src_obj.checksum, dest_obj.checksum)
+
     def test_invalid_get(self):
         # bad paths
         path_with_invalid_file = self.coll_path + '/hamsalad'
         path_with_invalid_coll = self.coll_path + '/hamsandwich/foo'
 
-        with self.assertRaises(DataObjectDoesNotExist):
+        with self.assertRaises(ex.DataObjectDoesNotExist):
             obj = self.sess.data_objects.get(path_with_invalid_file)
 
-        with self.assertRaises(DataObjectDoesNotExist):
+        with self.assertRaises(ex.CollectionDoesNotExist):
             obj = self.sess.data_objects.get(path_with_invalid_coll)
 
     def test_force_unlink(self):
@@ -135,7 +191,7 @@ class TestDataObjOps(unittest.TestCase):
         obj.unlink(force=True)
 
         # should be gone
-        with self.assertRaises(DataObjectDoesNotExist):
+        with self.assertRaises(ex.DataObjectDoesNotExist):
             obj = self.sess.data_objects.get(file_path)
 
         # make sure it's not in the trash either
@@ -155,7 +211,7 @@ class TestDataObjOps(unittest.TestCase):
         truncated_content = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
         # make object
-        obj = helpers.make_object(self.sess, file_path, content)
+        obj = helpers.make_object(self.sess, file_path, content=content)
 
         # truncate object
         obj.truncate(len(truncated_content))
@@ -163,28 +219,27 @@ class TestDataObjOps(unittest.TestCase):
         # read file
         obj = self.sess.data_objects.get(file_path)
         with obj.open('r') as f:
-            self.assertEqual(f.read(), truncated_content)
+            self.assertEqual(f.read().decode(), truncated_content)
 
     def test_multiple_reads(self):
         collection = self.coll_path
 
         # make files
-        files = []
+        filenames = []
         for filename in ['foo', 'bar', 'baz']:
             path = '{collection}/{filename}'.format(**locals())
             helpers.make_object(self.sess, path=path, content=path)
-            files.append(path)
+            filenames.append(path)
 
         # read files
-        for file in files:
-            obj = self.sess.data_objects.get(file)
+        for filename in filenames:
+            obj = self.sess.data_objects.get(filename)
             with obj.open('r') as f:
-                self.assertEqual(f.read(), obj.path)
+                self.assertEqual(f.read().decode(), obj.path)
 
     @unittest.skipIf(
         config.IRODS_SERVER_HOST != 'localhost' and config.IRODS_SERVER_HOST != socket.gethostname(
-        ),
-                     "Cannot modify remote server configuration")
+        ), "Cannot modify remote server configuration")
     def test_create_with_checksum(self):
         # skip if server is older than 4.2
         if self.server_version < (4, 2, 0):
@@ -226,7 +281,8 @@ class TestDataObjOps(unittest.TestCase):
                     hashlib.sha256(contents).digest()).decode()
 
                 # make object in test collection
-                obj = helpers.make_object(self.sess, obj_path, contents)
+                options = {kw.OPR_TYPE_KW: 1}   # PUT_OPR
+                obj = helpers.make_object(self.sess, obj_path, content=contents, options=options)
 
                 # verify object's checksum
                 self.assertEqual(
@@ -238,10 +294,53 @@ class TestDataObjOps(unittest.TestCase):
         except IOError as e:
             # a likely fail scenario
             if e.errno == 13:
-                self.fail("No permission to modify server configuration")
+                self.skipTest("No permission to modify server configuration")
             raise
         except:
             raise
+
+
+    def test_open_file_with_options(self):
+        '''
+        Similar to checksum test above,
+        except that we use an optional keyword on open
+        instead of a PEP.
+        '''
+
+        # skip if server is 4.1.4 or older
+        if self.server_version <= (4, 1, 4):
+            self.skipTest('Not supported')
+
+        # test data
+        collection = self.coll_path
+        filename = 'test_open_file_with_options.txt'
+        file_path = '/tmp/{filename}'.format(**locals())
+        obj_path = '{collection}/{filename}'.format(**locals())
+        contents = u"blah blah " * 10000
+        checksum = base64.b64encode(hashlib.sha256(contents.encode('utf-8')).digest()).decode()
+
+        objs = self.sess.data_objects
+
+        # make test file
+        with open(file_path, 'w') as f:
+            f.write(contents)
+
+        # options for open/close
+        options = {kw.REG_CHKSUM_KW: ''}
+
+        # write contents of file to object
+        with open(file_path, 'rb') as f, objs.open(obj_path, 'w', options) as o:
+            for chunk in chunks(f):
+                o.write(chunk)
+
+        # update object and verify checksum
+        obj = self.sess.data_objects.get(obj_path)
+        self.assertEqual(obj.checksum, "sha2:{checksum}".format(**locals()))
+
+        # cleanup
+        obj.unlink(force=True)
+        os.unlink(file_path)
+
 
     def test_obj_replicate(self):
         # test data
@@ -281,6 +380,110 @@ class TestDataObjOps(unittest.TestCase):
 
         # delete second resource
         self.sess.resources.remove(resc_name)
+
+
+    @unittest.skipIf(config.IRODS_SERVER_VERSION < (4, 0, 0), "iRODS 4+")
+    def test_replica_number(self):
+        session = self.sess
+        zone = session.zone
+        username = session.username
+        obj_path = '/{zone}/home/{username}/foo.txt'.format(**locals())
+        obj_content = b'blah'
+        number_of_replicas = 7
+
+        # make replication resource
+        replication_resource = session.resources.create('repl_resc', 'replication')
+
+        # make ufs resources
+        ufs_resources = []
+        for i in range(number_of_replicas):
+            resource_name = 'ufs{0}'.format(i)
+            resource_type = 'unixfilesystem'
+            resource_host = session.host
+            resource_path = '/tmp/' + resource_name
+            ufs_resources.append(session.resources.create(
+                resource_name, resource_type, resource_host, resource_path))
+
+            # add child to replication resource
+            session.resources.add_child(replication_resource.name, resource_name)
+
+        # create object on replication resource
+        obj = session.data_objects.create(obj_path, replication_resource.name)
+
+        # write to object
+        with obj.open('w+') as obj_desc:
+            obj_desc.write(obj_content)
+
+        # refresh object
+        obj = session.data_objects.get(obj_path)
+
+        # assertions on replicas
+        self.assertEqual(len(obj.replicas), number_of_replicas)
+        for i, replica in enumerate(obj.replicas):
+            self.assertEqual(replica.number, i)
+
+        # now trim odd-numbered replicas
+        for i in [1, 3, 5]:
+            options = {}
+            options[kw.REPL_NUM_KW] = str(i)
+            obj.unlink(options=options)
+
+        # refresh object
+        obj = session.data_objects.get(obj_path)
+
+        # check remaining replica numbers
+        replica_numbers = []
+        for replica in obj.replicas:
+            replica_numbers.append(replica.number)
+        self.assertEqual(replica_numbers, [0, 2, 4, 6])
+
+        # remove object
+        obj.unlink(force=True)
+
+        # remove ufs resources
+        for resource in ufs_resources:
+            session.resources.remove_child(replication_resource.name, resource.name)
+            resource.remove()
+
+        # remove replication resource
+        replication_resource.remove()
+
+
+    def test_obj_put_get(self):
+
+        # Can't do one step open/create with older servers
+        if self.server_version <= (4, 1, 4):
+            self.skipTest('For iRODS 4.1.5 and newer')
+
+        # test vars
+        test_dir = '/tmp'
+        filename = 'obj_put_get_test_file'
+        test_file = os.path.join(test_dir, filename)
+        collection = self.coll.path
+
+        # make random 16M binary file
+        with open(test_file, 'wb') as f:
+            f.write(os.urandom(1024 * 1024 * 16))
+
+        # compute file checksum
+        digest = self.sha256_checksum(test_file)
+
+        # put file in test collection
+        self.sess.data_objects.put(test_file, collection + '/')
+
+        # delete file
+        os.remove(test_file)
+
+        # get file back
+        obj_path = '{collection}/{filename}'.format(**locals())
+        self.sess.data_objects.get(obj_path, test_dir)
+
+        # re-compute and verify checksum
+        self.assertEqual(digest, self.sha256_checksum(test_file))
+
+        # delete file
+        os.remove(test_file)
+
 
 if __name__ == '__main__':
     # let the tests find the parent irods lib

@@ -1,9 +1,10 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
-from irods.session import iRODSSession
 import irods.test.config as config
+import irods.test.helpers as helpers
 
 
 class TestFiles(unittest.TestCase):
@@ -13,26 +14,20 @@ class TestFiles(unittest.TestCase):
     test_coll_path = '/{0}/home/{1}/test_dir'.format(
         config.IRODS_SERVER_ZONE, config.IRODS_USER_USERNAME)
     test_obj_name = 'test1'
-    content_str = 'blah'
-    write_str = '0123456789'
-    write_str1 = 'INTERRUPT'
+    content_str = u'blah'
+    write_str = u'0123456789'
+    write_str1 = u'INTERRUPT'
 
     test_obj_path = test_coll_path + '/' + test_obj_name
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,  # 4444: why?
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
         # Create test collection
         self.test_coll = self.sess.collections.create(self.test_coll_path)
 
-        # Create test object and write to it
-        self.test_obj = self.sess.data_objects.create(self.test_obj_path)
-        with self.test_obj.open('r+') as f:
-            f.write(self.content_str)
+        # Create test object
+        helpers.make_object(self.sess, self.test_obj_path, self.content_str)
 
     def tearDown(self):
         '''Remove test data and close connections
@@ -66,7 +61,7 @@ class TestFiles(unittest.TestCase):
 
         obj = self.sess.data_objects.get(self.test_obj_path)
         f = obj.open('r+')
-        str1 = f.read(1024)
+        str1 = f.read(1024).decode('utf-8')
         # self.assertTrue(expr, msg)
 
         # check content of test file
@@ -79,15 +74,15 @@ class TestFiles(unittest.TestCase):
 
         obj = self.sess.data_objects.get(self.test_obj_path)
         f = obj.open('w+')
-        f.write(self.write_str)
+        f.write(self.write_str.encode('utf-8'))
         f.seek(-6, 2)
-        f.write(self.write_str1)
+        f.write(self.write_str1.encode('utf-8'))
 
         # reset stream position for reading
         f.seek(0, 0)
 
         # check new content of file after our write
-        str1 = f.read(1024)
+        str1 = f.read(1024).decode('utf-8')
         assert str1 == (self.write_str[:-6] + self.write_str1)
 
         # self.assertTrue(expr, msg)

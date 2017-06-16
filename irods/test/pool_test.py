@@ -1,20 +1,15 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
-from irods.session import iRODSSession
-from irods.exception import NetworkException
-import irods.test.config as config
+import irods.test.helpers as helpers
 
 
 class TestPool(unittest.TestCase):
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,  # 4444: why?
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
     def tearDown(self):
         '''Close connections

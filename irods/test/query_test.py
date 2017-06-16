@@ -1,13 +1,15 @@
 #! /usr/bin/env python
+from __future__ import absolute_import
 import os
 import sys
 import unittest
 from irods.models import User, Collection, DataObject, Resource
-from irods.session import iRODSSession
-from irods.exception import MultipleResultsFound
-from irods.query import new_icat_keys
+from irods.exception import MultipleResultsFound, CAT_UNKNOWN_SPECIFIC_QUERY, CAT_INVALID_ARGUMENT
+from irods.query import new_icat_keys, SpecificQuery
 from irods.column import Criterion
+from irods import MAX_SQL_ROWS
 import irods.test.config as config
+import irods.test.helpers as helpers
 
 
 class TestQuery(unittest.TestCase):
@@ -18,11 +20,7 @@ class TestQuery(unittest.TestCase):
     obj_path = '{0}/{1}'.format(coll_path, obj_name)
 
     def setUp(self):
-        self.sess = iRODSSession(host=config.IRODS_SERVER_HOST,
-                                 port=config.IRODS_SERVER_PORT,  # 4444 why?
-                                 user=config.IRODS_USER_USERNAME,
-                                 password=config.IRODS_USER_PASSWORD,
-                                 zone=config.IRODS_SERVER_ZONE)
+        self.sess = helpers.make_session_from_config()
 
         # Create test collection and (empty) test object
         self.coll = self.sess.collections.create(self.coll_path)
@@ -151,6 +149,112 @@ class TestQuery(unittest.TestCase):
 
         rows = self.sess.query(Resource).filter(Criterion('like', Resource.name, 'dem%')).get_results()
         self.assertIn('demoResc', [row[Resource.name] for row in rows])
+
+
+class TestSpecificQuery(unittest.TestCase):
+
+    def setUp(self):
+        super(TestSpecificQuery, self).setUp()
+        self.session = helpers.make_session_from_config()
+
+
+    def tearDown(self):
+        self.session.cleanup()
+        super(TestSpecificQuery, self).tearDown()
+
+
+    def test_query_data_name_and_id(self):
+        # make a test collection larger than MAX_SQL_ROWS (number of files)
+        test_collection_size = 3*MAX_SQL_ROWS
+        test_collection_path = '/{0}/home/{1}/test_collection'.format(self.session.zone, self.session.username)
+        self.test_collection = helpers.make_test_collection(
+            self.session, test_collection_path, obj_count=test_collection_size)
+
+        # make specific query
+        sql = "select data_name, data_id from r_data_main join r_coll_main using (coll_id) where coll_name = '{test_collection_path}'".format(**locals())
+        alias = 'list_data_name_id'
+        columns = [DataObject.name, DataObject.id]
+        query = SpecificQuery(self.session, sql, alias, columns)
+
+        # register query in iCAT
+        query.register()
+
+        # run query and check results
+        for i, result in enumerate(query.get_results()):
+            self.assertIn('test', result[DataObject.name])
+            self.assertIsNotNone(result[DataObject.id])
+        self.assertEqual(i, test_collection_size - 1)
+
+        # unregister query
+        query.remove()
+
+        # remove test collection
+        self.test_collection.remove(recurse=True, force=True)
+
+
+    def test_query_data_name_and_id_no_columns(self):
+        '''Same test as above, but without providing query columns to parse results.
+        Result columns are retrieved by index 0..n
+        '''
+
+        # make a test collection larger than MAX_SQL_ROWS (number of files)
+        test_collection_size = 3*MAX_SQL_ROWS
+        test_collection_path = '/{0}/home/{1}/test_collection'.format(self.session.zone, self.session.username)
+        self.test_collection = helpers.make_test_collection(
+            self.session, test_collection_path, obj_count=test_collection_size)
+
+        # make specific query
+        sql = "select data_name, data_id from r_data_main join r_coll_main using (coll_id) where coll_name = '{test_collection_path}'".format(**locals())
+        alias = 'list_data_name_id'
+        query = SpecificQuery(self.session, sql, alias)
+
+        # register query in iCAT
+        query.register()
+
+        # run query and check results
+        for i, result in enumerate(query.get_results()):
+            self.assertIn('test', result[0])
+            self.assertIsNotNone(result[1])
+        self.assertEqual(i, test_collection_size - 1)
+
+        # unregister query
+        query.remove()
+
+        # remove test collection
+        self.test_collection.remove(recurse=True, force=True)
+
+
+    def test_register_query_twice(self):
+        query = SpecificQuery(self.session, sql='select data_name from r_data_main', alias='list_data_names')
+
+        # register query
+        query.register()
+
+        # register same query again
+        with self.assertRaises(CAT_INVALID_ARGUMENT) as ex:
+            query.register()
+
+        # check the error message
+        self.assertEqual(str(ex.exception), 'Alias is not unique')
+
+        # remove query
+        query.remove()
+
+
+    def test_list_specific_queries(self):
+        query = SpecificQuery(self.session, alias='ls')
+
+        for result in query.get_results():
+            self.assertIsNotNone(result[0])             # query alias
+            self.assertIn('SELECT', result[1].upper())  # query string
+
+
+    def test_list_specific_queries_with_wrong_alias(self):
+        query = SpecificQuery(self.session, alias='foo')
+
+        with self.assertRaises(CAT_UNKNOWN_SPECIFIC_QUERY):
+            query.get_results().next()
+
 
 if __name__ == '__main__':
     # let the tests find the parent irods lib

@@ -1,35 +1,53 @@
 Python iRODS Client (PRC)
-============
+=========================
 
-[iRODS](https://www.irods.org) is an open-source distributed filesystem manager.  This a client API implemented in python.
+[iRODS](https://www.irods.org) is an open-source distributed data management system. This is a client API implemented in python.
 
-This project should be considered pre-alpha. Here's what works:
-- [x] Establish a connection to iRODS, authenticate
-- [x] Implement basic Gen Queries (select columns and filtering)
-- [ ] Support more advanced Gen Queries with limits, offsets, and aggregations
-- [x] Query the collections and data objects within a collection
-- [x] Support read, write, and seek operations for files
-- [x] Delete data objects
-- [x] Create collections
-- [x] Delete collections
-- [x] Rename data objects
-- [x] Rename collections
-- [x] Query metadata for collections and data objects
-- [x] Add, edit, remove metadata
-- [ ] Replicate data objects to different resource servers
-- [x] Connection pool management
-- [x] Implement gen query result sets as lazy queries
-- [x] Return empty result sets when CAT_NO_ROWS_FOUND is raised
-- [x] Manage permissions
-- [x] Manage users and groups
-- [ ] Manage zones
-- [x] Manage resources
+Currently supported:
 
-Installation
+- Establish a connection to iRODS, authenticate
+- Implement basic Gen Queries (select columns and filtering)
+- Support more advanced Gen Queries with limits, offsets, and aggregations
+- Query the collections and data objects within a collection
+- Execute direct SQL queries
+- Execute iRODS rules
+- Support read, write, and seek operations for files
+- Delete data objects
+- Create collections
+- Delete collections
+- Rename data objects
+- Rename collections
+- Query metadata for collections and data objects
+- Add, edit, remove metadata
+- Replicate data objects to different resource servers
+- Connection pool management
+- Implement gen query result sets as lazy queries
+- Return empty result sets when CAT_NO_ROWS_FOUND is raised
+- Manage permissions
+- Manage users and groups
+- Manage resources
+- GSI authentication
+- Unicode strings
+- Python 2.7, 3.4 or newer
+
+Installing
+----------
+PRC requires Python 2.7 or 3.4+.
+To install with pip:
+```bash
+pip install python-irodsclient
+```
+or:
+```bash
+pip install git+https://github.com/irods/python-irodsclient.git[@branch|@commit|@tag]
+```
+
+Uninstalling
 ------------
-PRC requires Python 2.7. Installation with pip is easy!
 
-    pip install git+git://github.com/irods/python-irodsclient.git
+```bash
+pip uninstall python-irodsclient
+```
 
 Establishing a connection
 -------------------------
@@ -94,10 +112,21 @@ Get an existing data object:
 test1
 >>> obj.collection
 <iRODSCollection /tempZone/home/rods>
+
+>>> for replica in obj.replicas:
+...     print replica.resource_name
+...     print replica.number
+...     print replica.path
+...     print replica.status
+...
+demoResc
+0
+/var/lib/irods/Vault/home/rods/test1
+1
 ```
 
 Reading and writing files
------------------------
+-------------------------
 PRC provides [file-like objects](http://docs.python.org/2/library/stdtypes.html#file-objects) for reading and writing files
 ```python
 >>> obj = sess.data_objects.get("/tempZone/home/rods/test1")
@@ -170,4 +199,71 @@ Query with aggregation(min, max, sum, avg, count):
 +--------------+-----------+-----------+
 | rods         | 10        | 10836     |
 +--------------+-----------+-----------+
+```
+
+Run a Specifc Query (similar to iquest --sql <name>), using the 0.6.0 additional functionality of reading the iRODS environment files:
+--------------------------------------------------------------------------------------------------------------------------------------
+```python
+>>> import os
+>>> import json
+>>> 
+>>> from irods.session import iRODSSession
+>>> from irods.models import Collection, DataObject, Resource
+>>> from irods.query import SpecificQuery
+>>> 
+>>> 
+>>> def get_session():
+...     """
+...     establish a session to the iCAT server, using the iRODS environment env_file
+...     (MUST use library version >= 0.6.0)
+...     evaluate where to get the session information from,
+...     return an iRODS session *and* array with irods_environment.json info encoded for later use
+...     example decoded irods_environment.json;
+...         >>> pprint(ienv)
+...         {u'irods_authentication_scheme': u'KRB',
+...          u'irods_cwd': u'/DevZone/home/john',
+...          u'irods_def_resource': u'wtsiusers',
+...          u'irods_home': u'/DevZone/home/john',
+...          u'irods_host': u'icat.genomeresearch.ac.uk',
+...          u'irods_port': 1247,
+...          u'irods_user_name': u'john',
+...          u'irods_zone_name': u'DevZone'}
+...     """
+...     try:
+...         env_file = os.environ['IRODS_ENVIRONMENT_FILE']
+...     except KeyError:
+...         env_file = os.path.expanduser('~/.irods/irods_environment.json')
+...     with open(env_file) as data_file:
+...         ienv = json.load(data_file)
+...     return (iRODSSession(irods_env_file=env_file), ienv)
+... 
+>>> 
+>>> 
+>>> (SESS, ienv_info) = get_session()
+>>> 
+>>> #test session working OK
+... col_to_check = "/{}/home/irods".format(ienv_info['irods_zone_name'])
+>>> coll = SESS.collections.get(col_to_check)
+>>> print coll.id
+10286
+>>> 
+>>> CompoundResourceTree = "root"
+>>> # make specific query
+... sql = "select count(*) from r_data_main where resc_name = '{}' and data_is_dirty = '0'".format(CompoundResourceTree)
+>>> sql_alias = 'DirtyReplicas{}'.format(CompoundResourceTree)
+>>> query = SpecificQuery(SESS, sql, sql_alias)
+>>> 
+>>> # register query in iCAT
+... query.register()
+<irods.message.iRODSMessage object at 0x1face50>
+>>> 
+>>> #run the Specific Query
+... res_q = SpecificQuery(SESS, alias=sql_alias)
+>>> res_q.get_results()
+<generator object get_results at 0x1d2e730>
+>>> for r in res_q.get_results():
+...     print(r[0])
+... 
+0
+
 ```

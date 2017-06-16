@@ -1,15 +1,40 @@
+from __future__ import absolute_import
 import os
 import tempfile
 import contextlib
 import shutil
+import irods.test.config as config
+from irods.session import iRODSSession
+from irods.message import iRODSMessage
+from six.moves import range
 
 
-def make_object(session, path, content=None):
-    if not content:
-        content = 'blah'
+def make_session_from_config(**kwargs):
+    conf_map = {'host': 'IRODS_SERVER_HOST',
+                'port': 'IRODS_SERVER_PORT',
+                'zone': 'IRODS_SERVER_ZONE',
+                'user': 'IRODS_USER_USERNAME',
+                'authentication_scheme': 'IRODS_AUTHENTICATION_SCHEME',
+                'password': 'IRODS_USER_PASSWORD',
+                'server_dn': 'IRODS_SERVER_DN'}
+    for key in conf_map.keys():
+        try:
+            kwargs[key] = vars(config)[conf_map[key]]
+        except KeyError:
+            pass
 
+    return iRODSSession(**kwargs)
+
+
+def make_object(session, path, content=None, options=None):
+    if content is None:
+        content = u'blah'
+
+    content = iRODSMessage.encode_unicode(content)
+
+    # 2 step open-create necessary for iRODS 4.1.4 or older
     obj = session.data_objects.create(path)
-    with obj.open('w') as obj_desc:
+    with obj.open('w', options) as obj_desc:
         obj_desc.write(content)
 
     # refresh object after write
@@ -24,16 +49,16 @@ def make_collection(session, path, object_names=None, object_content=None):
     if object_names:
         for name in object_names:
             obj_path = os.path.join(path, name)
-            make_object(session, obj_path, object_content)
+            make_object(session, obj_path, content=object_content)
 
     return coll
 
 
-def make_dummy_collection(session, path, obj_count):
+def make_test_collection(session, path, obj_count):
     coll = session.collections.create(path)
 
     for n in range(obj_count):
-        obj_path = path + "/dummy" + str(n).zfill(6) + ".txt"
+        obj_path = path + "/test" + str(n).zfill(6) + ".txt"
         make_object(session, obj_path)
 
     return coll

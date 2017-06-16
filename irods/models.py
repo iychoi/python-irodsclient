@@ -1,11 +1,13 @@
+from __future__ import absolute_import
 from irods.column import Column, Integer, String, DateTime, Keyword
+import six
 
 
 class ModelBase(type):
     columns = {}
 
     def __new__(cls, name, bases, attr):
-        columns = [y for (x, y) in attr.iteritems() if isinstance(y, Column)]
+        columns = [y for (x, y) in six.iteritems(attr) if isinstance(y, Column)]
         for col in columns:
             ModelBase.columns[col.icat_id] = col
         attr['_columns'] = columns
@@ -13,8 +15,8 @@ class ModelBase(type):
         return type.__new__(cls, name, bases, attr)
 
 
-class Model(object):
-    __metaclass__ = ModelBase
+class Model(six.with_metaclass(ModelBase, object)):
+    pass
 
 
 class Zone(Model):
@@ -27,13 +29,15 @@ class User(Model):
     name = Column(String, 'USER_NAME', 202)
     type = Column(String, 'USER_TYPE', 203)
     zone = Column(String, 'USER_ZONE', 204)
-    dn = Column(String, 'USER_DN', 205)
     info = Column(String, 'USER_INFO', 206)
     comment = Column(String, 'USER_COMMENT', 207)
     create_time = Column(DateTime, 'USER_CREATE_TIME', 208)
     modify_time = Column(DateTime, 'USER_MODIFY_TIME', 209)
 
-# R_COLL_USER_MAIN in rodsGenQuery.h
+
+class UserAuth(Model):
+    user_id = Column(Integer, 'USER_AUTH_ID', 1600)
+    user_dn = Column(String, 'USER_DN', 1601)
 
 
 class CollectionUser(Model):
@@ -63,7 +67,7 @@ class Resource(Model):
     children = Column(String, 'R_RESC_CHILDREN', 315)
     context = Column(String, 'R_RESC_CONTEXT', 316)
     parent = Column(String, 'R_RESC_PARENT', 317)
-    obj_count = Column(Integer, 'R_RESC_OBJCOUNT', 318)
+    parent_context = Column(String, 'R_RESC_PARENT_CONTEXT', 318)
 
 
 class DataObject(Model):
@@ -144,6 +148,13 @@ class CollectionAccess(Model):
     token_namespace = Column(String, 'COL_COLL_TOKEN_NAMESPACE', 712)
     user_id = Column(Integer, 'COL_COLL_ACCESS_USER_ID', 713)
     access_id = Column(Integer, 'COL_COLL_ACCESS_COLL_ID', 714)
+
+
+class SpecificQueryResult(Model):
+    '''
+    To parse results of specific queries. No corresponding iCAT table.
+    '''
+    value = Column(String, 'SQL_RESULT_VALUE', 0)
 
 
 # not really a model. Should be dict instead?

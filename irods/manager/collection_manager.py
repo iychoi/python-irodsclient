@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 from irods.models import Collection
 from irods.manager import Manager
 from irods.message import iRODSMessage, CollectionRequest, FileOpenRequest, ObjCopyRequest, StringStringMap
@@ -29,13 +30,15 @@ class CollectionManager(Manager):
             response = conn.recv()
         return self.get(path)
 
-    def remove(self, path, recurse=True, force=False, additional_flags={}):
+    def remove(self, path, recurse=True, force=False, additional_flags=None):
+        if additional_flags is None:
+            additional_flags = {}
         options = {}
         if recurse:
             options['recursiveOpr'] = ''
         if force:
             options['forceFlag'] = ''
-        options = dict(options.items() + additional_flags.items())
+        options = dict(list(options.items()) + list(additional_flags.items()))
         message_body = CollectionRequest(
             collName=path,
             KeyValPair_PI=StringStringMap(options)
